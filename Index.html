@@ -5,107 +5,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MVP-IMG V1.3 - Fix Puntos + % Ajustado</title>
-  <style>
-    body {
-      margin: 0;
-      background: #0f0f10;
-      color: #e8e8e8;
-      font-family:
-        system-ui,
-        Segoe UI,
-        Roboto;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-height: 100vh;
-    }
+  <link rel="stylesheet" href="../css/style.css" />
 
-    h1 {
-      margin: 16px 0 4px;
-      font-size: 19px;
-    }
-
-    #container {
-      position: relative;
-      width: 640px;
-      max-width: 95vw;
-      aspect-ratio: 4/3;
-      background: #1a1a1d;
-      border-radius: 16px;
-      overflow: hidden;
-      border: 1px solid #2a2a2e;
-    }
-
-    video,
-    canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      transform: scaleX(-1);
-    }
-
-    #ui {
-      width: 640px;
-      max-width: 95vw;
-      margin-top: 12px;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-
-    .card {
-      background: #1c1c1f;
-      border: 1px solid #2a2a2e;
-      border-radius: 12px;
-      padding: 12px;
-    }
-
-    #perc {
-      grid-column: span 2;
-      text-align: center;
-      padding: 18px;
-    }
-
-    #percValue {
-      font-size: 64px;
-      font-weight: 800;
-      line-height: 1;
-    }
-
-    .green {
-      color: #22c55e;
-    }
-
-    .yellow {
-      color: #eab308;
-    }
-
-    .red {
-      color: #ef4444;
-    }
-
-    .mono {
-      font-family: ui-monospace, Menlo, monospace;
-      font-size: 11px;
-      color: #a1a1aa;
-    }
-
-    button {
-      background: #fff;
-      color: #000;
-      border: 0;
-      border-radius: 10px;
-      padding: 10px 16px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
-    button:disabled {
-      opacity: 0.5;
-    }
-  </style>
   <script type="importmap">
       {
         "imports": {
@@ -116,7 +17,7 @@
 </head>
 
 <body>
-  <h1>MVP-IMG V1.3 · Puntos + % Corregido</h1>
+  <h1>Laboratorio Práctico</h1>
   <p class="mono">
     EAR &lt;0.21 cerrado | Blink &gt;0.6 = 0% | Cabeza desviada penaliza
     fuerte
