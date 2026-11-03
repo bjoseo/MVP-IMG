@@ -4,75 +4,63 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MVP-IMG V1.3 - Fix Puntos + % Ajustado</title>
-  <link rel="stylesheet" href="../css/style.css" />
-
+  <title>MVP-IMG</title>
+  <link rel="stylesheet" href="./style.css" />
   <script type="importmap">
-      {
-        "imports": {
-          "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
-        }
-      }
-    </script>
+    { "imports": { "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs" } }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
 </head>
 
 <body>
   <h1>Laboratorio Práctico</h1>
   <p class="mono">
     EAR &lt;0.21 cerrado | Blink &gt;0.6 = 0% | Cabeza desviada penaliza
-    fuerte
   </p>
 
   <div id="container">
     <video id="video" autoplay playsinline muted></video>
+    <canvas id="bgCanvas"></canvas>
     <canvas id="canvas"></canvas>
   </div>
 
-  <div style="margin: 12px; display: flex; gap: 8px">
+  <div class="controls">
     <button id="btnStart">Iniciar Webcam</button>
     <button id="btnStop" disabled>Detener</button>
-    <span id="status" class="mono" style="margin-left: 12px">Listo</span>
+    <button id="btnBlur" class="btn-secondary">FD: OFF</button>
+    <span id="status" class="mono status-text">Listo</span>
   </div>
 
   <div id="ui">
     <div id="perc" class="card">
       <div class="mono">ATENCIÓN</div>
       <div id="percValue" class="green">--%</div>
-      <div style="
-            height: 10px;
-            background: #2a2a2e;
-            border-radius: 8px;
-            margin-top: 10px;
-            overflow: hidden;
-          ">
-        <div id="bar" style="
-              height: 100%;
-              width: 0%;
-              background: #22c55e;
-              transition: width 0.15s;
-            "></div>
+      <div class="progress-track">
+        <div id="bar" class="progress-bar"></div>
       </div>
     </div>
     <div class="card">
       <div class="mono">Ojos</div>
-      <div id="earVal" style="font-size: 20px; font-weight: 700">--</div>
+      <div id="earVal" class="metric-value">--</div>
       <div id="eyeState" class="mono">--</div>
     </div>
     <div class="card">
       <div class="mono">Cabeza</div>
-      <div id="headVal" style="font-size: 20px; font-weight: 700">--</div>
+      <div id="headVal" class="metric-value">--</div>
       <div id="headState" class="mono">--</div>
     </div>
   </div>
 
   <script type="module">
     import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
-
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
+    const bgCanvas = document.getElementById('bgCanvas');
     const ctx = canvas.getContext('2d');
+    const bgCtx = bgCanvas.getContext('2d');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
+    const btnBlur = document.getElementById('btnBlur');
     const percValue = document.getElementById('percValue');
     const bar = document.getElementById('bar');
     const statusEl = document.getElementById('status');
@@ -81,194 +69,141 @@
     const headVal = document.getElementById('headVal');
     const headState = document.getElementById('headState');
 
-    function dist(a, b) {
-      return Math.hypot(a.x - b.x, a.y - b.y);
-    }
-    let faceLandmarker = null,
-      running = false,
-      stream = null;
-    let hist = [];
+    function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+    let faceLandmarker = null, selfieSegmentation = null, running = false, stream = null, blurEnabled = false, hist = [];
+    let segmentationMask = null;
 
-    async function createLandmarker() {
-      const vision = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm',
-      );
+    async function createModels() {
+      const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
       faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-          delegate: 'GPU',
-        },
-        outputFaceBlendshapes: true,
-        runningMode: 'VIDEO',
-        numFaces: 1,
+        baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate: 'GPU' },
+        outputFaceBlendshapes: true, runningMode: 'VIDEO', numFaces: 1
+      });
+      // Selfie Segmentation clásico para fondo
+      selfieSegmentation = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
+      selfieSegmentation.setOptions({ modelSelection: 1 });
+      selfieSegmentation.onResults((results) => {
+        segmentationMask = results.segmentationMask;
       });
     }
 
     function getAttention(lm, blend) {
-      let eyeOpen = 100,
-        ear = 0.3,
-        blinkAvg = 0;
+      let eyeOpen = 100, ear = 0.30, blinkAvg = 0;
       if (blend && blend[0]) {
-        const d = {};
-        blend[0].categories.forEach((c) => (d[c.categoryName] = c.score));
+        const d = {}; blend[0].categories.forEach(c => d[c.categoryName] = c.score);
         blinkAvg = ((d['eyeBlinkLeft'] || 0) + (d['eyeBlinkRight'] || 0)) / 2;
-        if (blinkAvg > 0.6) eyeOpen = 0;
-        else if (blinkAvg > 0.4) eyeOpen = (1 - blinkAvg) * 35;
-        else eyeOpen = (1 - blinkAvg) * 100;
+        if (blinkAvg > 0.60) eyeOpen = 0; else if (blinkAvg > 0.40) eyeOpen = (1 - blinkAvg) * 35; else eyeOpen = (1 - blinkAvg) * 100;
         ear = (1 - blinkAvg) * 0.32;
       } else {
-        const li = [33, 160, 158, 133, 153, 144],
-          ri = [362, 385, 387, 263, 373, 380];
-        const le = li.map((i) => lm[i]),
-          re = ri.map((i) => lm[i]);
-        const earL =
-          (dist(le[1], le[5]) + dist(le[2], le[4])) /
-          (2 * dist(le[0], le[3]));
-        const earR =
-          (dist(re[1], re[5]) + dist(re[2], re[4])) /
-          (2 * dist(re[0], re[3]));
+        const li = [33, 160, 158, 133, 153, 144], ri = [362, 385, 387, 263, 373, 380];
+        const le = li.map(i => lm[i]), re = ri.map(i => lm[i]);
+        const earL = (dist(le[1], le[5]) + dist(le[2], le[4])) / (2 * dist(le[0], le[3]));
+        const earR = (dist(re[1], re[5]) + dist(re[2], re[4])) / (2 * dist(re[0], re[3]));
         ear = (earL + earR) / 2;
-        if (ear < 0.18) eyeOpen = 0;
-        else if (ear < 0.21) eyeOpen = 10;
-        else if (ear < 0.25) eyeOpen = 50;
-        else eyeOpen = 100;
+        if (ear < 0.18) eyeOpen = 0; else if (ear < 0.21) eyeOpen = 10; else if (ear < 0.25) eyeOpen = 50; else eyeOpen = 100;
       }
-      const nose = lm[1],
-        left = lm[33],
-        right = lm[263];
-      const cx = (left.x + right.x) / 2;
-      const dx = Math.abs(nose.x - cx);
-      const dy = nose.y - 0.5;
-      let yawScore = 100,
-        pitchScore = 100;
-      if (dx > 0.08) yawScore = 5;
-      else if (dx > 0.05) yawScore = 40;
-      else if (dx > 0.03) yawScore = 75;
-      if (dy > 0.1) pitchScore = 5;
-      else if (dy > 0.06) pitchScore = 35;
-      else if (dy > 0.025) pitchScore = 75;
-      const headScore = yawScore * 0.6 + pitchScore * 0.4;
-      let attention;
-      if (eyeOpen < 8) attention = eyeOpen * 0.2;
-      else attention = eyeOpen * 0.75 + headScore * 0.25;
-      return { attention, ear, eyeOpen, headScore, blinkAvg, dx, dy };
+      const nose = lm[1], left = lm[33], right = lm[263];
+      const cx = (left.x + right.x) / 2; const dx = Math.abs(nose.x - cx);
+      let yaw = 100; if (dx > 0.08) yaw = 5; else if (dx > 0.05) yaw = 40; else if (dx > 0.03) yaw = 75;
+      const head = yaw;
+      let att; if (eyeOpen < 8) att = eyeOpen * 0.2; else att = eyeOpen * 0.75 + head * 0.25;
+      return { attention: att, ear, eyeOpen, headScore: head, blinkAvg };
     }
-
-    function smooth(v) {
-      hist.push(v);
-      if (hist.length > 5) hist.shift();
-      return hist.reduce((a, b) => a + b, 0) / hist.length;
-    }
+    function smooth(v) { hist.push(v); if (hist.length > 5) hist.shift(); return hist.reduce((a, b) => a + b, 0) / hist.length; }
 
     async function loop() {
       if (!running) return;
       try {
+        // Segmentación
+        if (blurEnabled && selfieSegmentation) {
+          await selfieSegmentation.send({ image: video });
+          if (segmentationMask) {
+            // Canvas temporal para recortar persona
+            const w = bgCanvas.width, h = bgCanvas.height;
+            // a) Fondo borroso
+            bgCtx.save();
+            bgCtx.filter = 'blur(18px)';
+            bgCtx.drawImage(video, 0, 0, w, h);
+            bgCtx.filter = 'none';
+            bgCtx.restore();
+
+            // imagen nítida
+            bgCtx.save();
+            bgCtx.globalCompositeOperation = 'source-over';
+            // Dibujar máscara como alpha
+            // Creamos un canvas intermedio para aplicar la máscara
+            const tmp = document.createElement('canvas');
+            tmp.width = w; tmp.height = h;
+            const tmpCtx = tmp.getContext('2d');
+            tmpCtx.drawImage(segmentationMask, 0, 0, w, h);
+            tmpCtx.globalCompositeOperation = 'source-in';
+            tmpCtx.drawImage(video, 0, 0, w, h);
+            // Ahora tmp tiene solo la persona nítida
+            bgCtx.drawImage(tmp, 0, 0);
+            bgCtx.restore();
+            bgCanvas.style.display = 'block';
+          }
+        } else {
+          bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+          bgCanvas.style.display = 'none';
+        }
+
+        // 2. Detección de atención
         const res = faceLandmarker.detectForVideo(video, performance.now());
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         if (res.faceLandmarks && res.faceLandmarks.length > 0) {
           const lm = res.faceLandmarks[0];
           const r = getAttention(lm, res.faceBlendshapes);
           const s = smooth(r.attention);
-
-          // PUNTOS - siempre visibles
           ctx.save();
-          // ojos
           ctx.fillStyle = '#22c55e';
-          [33, 133, 160, 158, 153, 144, 362, 263, 385, 387, 373, 380].forEach(
-            (i) => {
-              const p = lm[i];
-              if (!p) return;
-              ctx.beginPath();
-              ctx.arc(
-                p.x * canvas.width,
-                p.y * canvas.height,
-                2.5,
-                0,
-                Math.PI * 2,
-              );
-              ctx.fill();
-            },
-          );
-          // nariz
+          [33, 133, 160, 158, 153, 144, 362, 263, 385, 387, 373, 380].forEach(i => {
+            const p = lm[i]; if (!p) return;
+            ctx.beginPath(); ctx.arc(p.x * canvas.width, p.y * canvas.height, 3, 0, Math.PI * 2); ctx.fill();
+          });
           ctx.fillStyle = '#eab308';
-          ctx.beginPath();
-          ctx.arc(
-            lm[1].x * canvas.width,
-            lm[1].y * canvas.height,
-            5,
-            0,
-            Math.PI * 2,
-          );
-          ctx.fill();
+          ctx.beginPath(); ctx.arc(lm[1].x * canvas.width, lm[1].y * canvas.height, 5, 0, Math.PI * 2); ctx.fill();
           ctx.restore();
 
           earVal.textContent = `EAR ${r.ear.toFixed(3)} blink ${r.blinkAvg.toFixed(2)}`;
-          eyeState.textContent =
-            r.eyeOpen < 8
-              ? 'CERRADOS'
-              : r.eyeOpen < 50
-                ? 'Entrecerrados'
-                : 'Abiertos';
+          eyeState.textContent = r.eyeOpen < 8 ? 'CERRADOS' : r.eyeOpen < 50 ? 'Entrecerrados' : 'Abiertos';
           headVal.textContent = `${r.headScore.toFixed(0)}%`;
-          headState.textContent =
-            r.headScore < 30
-              ? 'Desviada/agachada'
-              : r.headScore < 70
-                ? 'Leve desvío'
-                : 'Frente';
+          headState.textContent = r.headScore < 30 ? 'Desviada' : r.headScore < 70 ? 'Leve desvío' : 'Frente';
 
           percValue.textContent = Math.round(s) + '%';
           bar.style.width = Math.round(s) + '%';
-          if (s > 75) {
-            percValue.className = 'green';
-            bar.style.background = '#22c55e';
-            statusEl.textContent = 'ATENTO';
-          } else if (s > 35) {
-            percValue.className = 'yellow';
-            bar.style.background = '#eab308';
-            statusEl.textContent = 'MEDIA';
-          } else {
-            percValue.className = 'red';
-            bar.style.background = '#ef4444';
-            statusEl.textContent = 'NO ATENTO';
-          }
+          if (s > 75) { percValue.className = 'green'; bar.style.background = '#22c55e'; statusEl.textContent = 'ATENTO'; }
+          else if (s > 35) { percValue.className = 'yellow'; bar.style.background = '#eab308'; statusEl.textContent = 'MEDIA'; }
+          else { percValue.className = 'red'; bar.style.background = '#ef4444'; statusEl.textContent = 'NO ATENTO'; }
         } else {
           statusEl.textContent = 'Buscando rostro...';
         }
-      } catch (e) {
-        console.error(e);
-        statusEl.textContent = 'Error detección';
-      }
+      } catch (e) { console.error(e); }
       requestAnimationFrame(loop);
     }
 
     btnStart.onclick = async () => {
       btnStart.disabled = true;
-      if (location.protocol === 'file:') {
-        statusEl.textContent = 'Usa Live Server (localhost)';
-        btnStart.disabled = false;
-        return;
-      }
-      if (!faceLandmarker) await createLandmarker();
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 },
-      });
+      if (location.protocol === 'file:') { statusEl.textContent = 'Usa Live Server'; btnStart.disabled = false; return; }
+      if (!faceLandmarker) await createModels();
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
       video.srcObject = stream;
-      await new Promise((r) => (video.onloadedmetadata = () => r()));
+      await new Promise(r => video.onloadedmetadata = () => r());
       await video.play();
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      running = true;
-      btnStop.disabled = false;
-      statusEl.textContent = 'Detectando...';
+      [canvas, bgCanvas].forEach(c => { c.width = video.videoWidth; c.height = video.videoHeight; });
+      bgCanvas.style.display = 'none';
+      running = true; btnStop.disabled = false;
       requestAnimationFrame(loop);
     };
     btnStop.onclick = () => {
-      running = false;
-      if (stream) stream.getTracks().forEach((t) => t.stop());
-      btnStart.disabled = false;
-      btnStop.disabled = true;
+      running = false; if (stream) stream.getTracks().forEach(t => t.stop());
+      btnStart.disabled = false; btnStop.disabled = true;
+    };
+    btnBlur.onclick = () => {
+      blurEnabled = !blurEnabled;
+      btnBlur.textContent = `FD: ${blurEnabled ? 'ON' : 'OFF'}`;
+      btnBlur.classList.toggle('active', blurEnabled);
+      if (!blurEnabled) { bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height); bgCanvas.style.display = 'none'; }
     };
   </script>
 </body>
